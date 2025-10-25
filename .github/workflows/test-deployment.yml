@@ -1,0 +1,244 @@
+name: Blue/Green Deployment Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  # Override these in your repository secrets/variables if needed
+  BLUE_IMAGE: ${{ vars.BLUE_IMAGE || 'ghcr.io/codelikesuraj/docker-nodejs-blue-green-service:blue' }}
+  GREEN_IMAGE: ${{ vars.GREEN_IMAGE || 'ghcr.io/codelikesuraj/docker-nodejs-blue-green-service:green' }}
+  ACTIVE_POOL: ${{ vars.ACTIVE_POOL || 'blue' }}
+  RELEASE_ID_BLUE: ${{ vars.RELEASE_ID_BLUE || 'v1-0-0-blue' }}
+  RELEASE_ID_GREEN: ${{ vars.RELEASE_ID_GREEN || 'v1-0-0-green' }}
+  APP_PORT: ${{ vars.APP_PORT || '3000' }}
+
+jobs:
+  test-failover:
+    name: Test Blue/Green Failover
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create .env file
+        run: |
+          cat > .env << EOF
+          BLUE_IMAGE=${{ env.BLUE_IMAGE }}
+          GREEN_IMAGE=${{ env.GREEN_IMAGE }}
+          ACTIVE_POOL=${{ env.ACTIVE_POOL }}
+          RELEASE_ID_BLUE=${{ env.RELEASE_ID_BLUE }}
+          RELEASE_ID_GREEN=${{ env.RELEASE_ID_GREEN }}
+          PORT=${{ env.PORT }}
+          EOF
+
+      - name: Display environment configuration
+        run: |
+          echo "=== Environment Configuration ==="
+          cat .env
+          echo ""
+
+      - name: Start services
+        run: |
+          docker compose up -d
+          echo "Services started, waiting for health checks..."
+
+      - name: Wait for services to be healthy
+        run: |
+          echo "Waiting for services to be ready..."
+          timeout=60
+          elapsed=0
+
+          while [ $elapsed -lt $timeout ]; do
+            if docker compose ps | grep -q "healthy"; then
+              all_healthy=true
+              for service in app_blue app_green nginx; do
+                if ! docker compose ps $service | grep -q "healthy\|running"; then
+                  all_healthy=false
+                  break
+                fi
+              done
+
+              if [ "$all_healthy" = true ]; then
+                echo "All services are healthy!"
+                break
+              fi
+            fi
+
+            echo "Waiting for services... ($elapsed seconds elapsed)"
+            sleep 3
+            elapsed=$((elapsed + 3))
+          done
+
+          if [ $elapsed -ge $timeout ]; then
+            echo "Timeout waiting for services to be healthy"
+            docker compose ps
+            docker compose logs
+            exit 1
+          fi
+
+      - name: Display service status
+        run: |
+          echo "=== Service Status ==="
+          docker compose ps
+          echo ""
+
+      - name: Test baseline - Blue active
+        run: |
+          echo "Testing baseline state (Blue should be active)..."
+          response=$(curl -s -i http://localhost:8080/version)
+          echo "$response"
+
+          status=$(echo "$response" | grep HTTP | awk '{print $2}')
+          app_pool=$(echo "$response" | grep -i "X-App-Pool:" | awk '{print $2}' | tr -d '\r')
+          release_id=$(echo "$response" | grep -i "X-Release-Id:" | awk '{print $2}' | tr -d '\r')
+
+          echo "Status: $status"
+          echo "X-App-Pool: $app_pool"
+          echo "X-Release-Id: $release_id"
+
+          if [ "$status" != "200" ]; then
+            echo "ERROR: Expected status 200, got $status"
+            exit 1
+          fi
+
+          if [ "$app_pool" != "blue" ]; then
+            echo "ERROR: Expected X-App-Pool: blue, got $app_pool"
+            exit 1
+          fi
+
+          echo "✓ Baseline test passed"
+
+      - name: Test direct access to Blue and Green
+        run: |
+          echo "Testing direct access to Blue (port 8081)..."
+          blue_response=$(curl -s -i http://localhost:8081/version)
+          blue_status=$(echo "$blue_response" | grep HTTP | awk '{print $2}')
+          blue_pool=$(echo "$blue_response" | grep -i "X-App-Pool:" | awk '{print $2}' | tr -d '\r')
+          echo "Blue Status: $blue_status, Pool: $blue_pool"
+
+          echo "Testing direct access to Green (port 8082)..."
+          green_response=$(curl -s -i http://localhost:8082/version)
+          green_status=$(echo "$green_response" | grep HTTP | awk '{print $2}')
+          green_pool=$(echo "$green_response" | grep -i "X-App-Pool:" | awk '{print $2}' | tr -d '\r')
+          echo "Green Status: $green_status, Pool: $green_pool"
+
+          if [ "$blue_status" != "200" ] || [ "$green_status" != "200" ]; then
+            echo "ERROR: Both services should be accessible"
+            exit 1
+          fi
+
+          echo "✓ Direct access test passed"
+
+      - name: Induce chaos on Blue
+        run: |
+          echo "Inducing chaos on Blue service..."
+          curl -X POST http://localhost:8081/chaos/start?mode=error
+          echo "Chaos induced, waiting 2 seconds for Nginx to detect failure..."
+          sleep 2
+
+      - name: Test automatic failover to Green
+        run: |
+          echo "Testing automatic failover to Green..."
+          response=$(curl -s -i http://localhost:8080/version)
+          echo "$response"
+
+          status=$(echo "$response" | grep HTTP | awk '{print $2}')
+          app_pool=$(echo "$response" | grep -i "X-App-Pool:" | awk '{print $2}' | tr -d '\r')
+          release_id=$(echo "$response" | grep -i "X-Release-Id:" | awk '{print $2}' | tr -d '\r')
+
+          echo "Status: $status"
+          echo "X-App-Pool: $app_pool"
+          echo "X-Release-Id: $release_id"
+
+          if [ "$status" != "200" ]; then
+            echo "ERROR: Expected status 200 after failover, got $status"
+            exit 1
+          fi
+
+          if [ "$app_pool" != "green" ]; then
+            echo "ERROR: Expected X-App-Pool: green after failover, got $app_pool"
+            exit 1
+          fi
+
+          echo "✓ Automatic failover test passed"
+
+      - name: Load test - Verify zero failures
+        run: |
+          echo "Running load test (20 requests)..."
+          failed_count=0
+          green_count=0
+          total_requests=20
+
+          for i in $(seq 1 $total_requests); do
+            response=$(curl -s -i http://localhost:8080/version)
+            status=$(echo "$response" | grep HTTP | awk '{print $2}')
+            app_pool=$(echo "$response" | grep -i "X-App-Pool:" | awk '{print $2}' | tr -d '\r')
+
+            if [ "$status" != "200" ]; then
+              echo "Request $i: FAILED (Status: $status)"
+              failed_count=$((failed_count + 1))
+            else
+              if [ "$app_pool" = "green" ]; then
+                green_count=$((green_count + 1))
+              fi
+              echo "Request $i: SUCCESS (Pool: $app_pool)"
+            fi
+
+            sleep 0.3
+          done
+
+          echo ""
+          echo "Results:"
+          echo "  Total requests: $total_requests"
+          echo "  Green responses: $green_count"
+          echo "  Failed requests: $failed_count"
+
+          success_rate=$(( ($total_requests - $failed_count) * 100 / $total_requests ))
+          green_percentage=$(( $green_count * 100 / $total_requests ))
+
+          echo "  Success rate: $success_rate%"
+          echo "  Green percentage: $green_percentage%"
+
+          if [ $failed_count -ne 0 ]; then
+            echo "ERROR: Expected zero failures, got $failed_count"
+            exit 1
+          fi
+
+          if [ $green_percentage -lt 95 ]; then
+            echo "ERROR: Expected ≥95% from Green, got $green_percentage%"
+            exit 1
+          fi
+
+          echo "✓ Load test passed (zero failures, ≥95% from Green)"
+
+      - name: Stop chaos
+        if: always()
+        run: |
+          echo "Stopping chaos on Blue service..."
+          curl -X POST http://localhost:8081/chaos/stop || true
+
+      - name: Display logs on failure
+        if: failure()
+        run: |
+          echo "=== Nginx Logs ==="
+          docker compose logs nginx
+          echo ""
+          echo "=== Blue Service Logs ==="
+          docker compose logs app_blue
+          echo ""
+          echo "=== Green Service Logs ==="
+          docker compose logs app_green
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose down -v
