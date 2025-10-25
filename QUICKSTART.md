@@ -7,7 +7,7 @@
 ## 1. Clone and Setup
 
 ```bash
-git clone https://github.com/yourusername/hng13-stage2-devops.git
+git clone https://github.com/codelikesuraj/hng13-stage2-devops.git
 cd hng13-stage2-devops
 ```
 

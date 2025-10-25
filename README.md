@@ -1,4 +1,4 @@
-# HNG DevOps Internship - Stage 2: Blue/Green Deployment with Nginx Auto-Failover
+# Blue/Green Deployment with Nginx Auto-Failover
 
 ## Documentation
 
@@ -299,23 +299,22 @@ This setup is designed for automated testing in CI pipelines. The grader will:
 ## Project Structure
 
 ```
-hng13-stage2-devops/
-├── .env                     # Environment configuration
-├── .env.example             # Environment template
+blue-green-deployment/
+├── .env                        # Environment configuration
+├── .env.example                # Environment template
 ├── .github/
 │   └── workflows/
-│       └── test-deployment.yml  # CI/CD workflow
-├── .gitignore               # Git ignore rules
-├── ARCHITECTURE.md          # Architecture documentation
-├── DEPLOYMENT_CHECKLIST.md  # Deployment checklist
-├── QUICKSTART.md            # Quick start guide
-├── README.md                # This file
-├── docker-compose.yml       # Service orchestration
-├── entrypoint.sh            # Nginx startup script with envsubst
-├── nginx.conf.template      # Nginx configuration template
-└── test-failover.sh         # Automated test script
+│       └── test-deployment.yml # CI/CD workflow
+├── .gitignore                  # Git ignore rules
+├── ARCHITECTURE.md             # Architecture documentation
+├── QUICKSTART.md               # Quick start guide
+├── README.md                   # This file
+├── docker-compose.yml          # Service orchestration
+├── entrypoint.sh               # Nginx startup script with envsubst
+├── nginx.conf.template         # Nginx configuration template
+└── test-failover.sh            # Automated test script
 ```
 
 ## License
 
-This project is part of the HNG DevOps Internship Stage 2.
+MIT License
