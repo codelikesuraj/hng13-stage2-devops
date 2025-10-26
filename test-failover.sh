@@ -6,15 +6,19 @@ RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# Accept optional IP address, default to localhost
+HOST="${1:-localhost}"
+
 echo "=========================================="
 echo "Blue/Green Deployment Failover Test"
 echo "=========================================="
+echo "Target Host: $HOST"
 echo ""
 
 # Cleanup from previous test runs
 echo -e "${YELLOW}Cleanup: Stopping any existing chaos...${NC}"
-curl -s -X POST http://localhost:8081/chaos/stop > /dev/null 2>&1
-curl -s -X POST http://localhost:8082/chaos/stop > /dev/null 2>&1
+curl -s -X POST http://$HOST:8081/chaos/stop > /dev/null 2>&1
+curl -s -X POST http://$HOST:8082/chaos/stop > /dev/null 2>&1
 echo "Waiting 3 seconds for services to stabilize..."
 sleep 3
 echo -e "${GREEN}✓ Cleanup complete${NC}"
@@ -24,7 +28,7 @@ echo ""
 
 # Test 1: Baseline - Blue active (consecutive requests)
 echo -e "${YELLOW}Test 1: Baseline State (Blue Active)${NC}"
-echo "Testing http://localhost:8080/version with consecutive requests"
+echo "Testing http://$HOST:8080/version with consecutive requests"
 echo ""
 
 baseline_blue_count=0
@@ -32,7 +36,7 @@ baseline_failed=0
 baseline_requests=5
 
 for i in $(seq 1 $baseline_requests); do
-    response=$(curl -s -i http://localhost:8080/version)
+    response=$(curl -s -i http://$HOST:8080/version)
     status_code=$(echo "$response" | grep HTTP | awk '{print $2}')
     app_pool=$(echo "$response" | grep -i "X-App-Pool:" | awk '{print $2}' | tr -d '\r')
     release_id=$(echo "$response" | grep -i "X-Release-Id:" | awk '{print $2}' | tr -d '\r')
@@ -63,10 +67,10 @@ echo ""
 
 # Test 2: Induce chaos on Blue
 echo -e "${YELLOW}Test 2: Inducing Chaos on Blue${NC}"
-echo "POST http://localhost:8081/chaos/start?mode=error"
+echo "POST http://$HOST:8081/chaos/start?mode=error"
 echo ""
 
-chaos_response=$(curl -s -X POST http://localhost:8081/chaos/start?mode=error)
+chaos_response=$(curl -s -X POST http://$HOST:8081/chaos/start?mode=error)
 echo "Response: $chaos_response"
 echo -e "${GREEN}✓ Chaos induced on Blue${NC}"
 
@@ -74,10 +78,10 @@ echo ""
 
 # Test 3: Verify immediate switch to Green
 echo -e "${YELLOW}Test 3: Automatic Failover to Green${NC}"
-echo "Testing http://localhost:8080/version"
+echo "Testing http://$HOST:8080/version"
 echo ""
 
-response=$(curl -s -i http://localhost:8080/version)
+response=$(curl -s -i http://$HOST:8080/version)
 status_code=$(echo "$response" | grep HTTP | awk '{print $2}')
 app_pool=$(echo "$response" | grep -i "X-App-Pool:" | awk '{print $2}' | tr -d '\r')
 release_id=$(echo "$response" | grep -i "X-Release-Id:" | awk '{print $2}' | tr -d '\r')
@@ -107,7 +111,7 @@ blue_count=0
 total_requests=30
 
 for i in $(seq 1 $total_requests); do
-    response=$(curl -s -i http://localhost:8080/version)
+    response=$(curl -s -i http://$HOST:8080/version)
     status_code=$(echo "$response" | grep HTTP | awk '{print $2}')
     app_pool=$(echo "$response" | grep -i "X-App-Pool:" | awk '{print $2}' | tr -d '\r')
 
@@ -155,10 +159,10 @@ echo ""
 
 # Test 5: Stop chaos and verify
 echo -e "${YELLOW}Test 5: Stopping Chaos${NC}"
-echo "POST http://localhost:8081/chaos/stop"
+echo "POST http://$HOST:8081/chaos/stop"
 echo ""
 
-stop_response=$(curl -s -X POST http://localhost:8081/chaos/stop)
+stop_response=$(curl -s -X POST http://$HOST:8081/chaos/stop)
 echo "Response: $stop_response"
 echo -e "${GREEN}✓ Chaos stopped on Blue${NC}"
 
@@ -168,13 +172,13 @@ echo ""
 
 # Test 6: Verify Blue service becomes healthy again
 echo -e "${YELLOW}Test 6: Verify Blue Service Recovers${NC}"
-echo "Checking Blue service health at http://localhost:8081/healthz"
+echo "Checking Blue service health at http://$HOST:8081/healthz"
 echo ""
 
 # Give Blue a moment to recover
 sleep 2
 
-health_response=$(curl -s -i http://localhost:8081/healthz)
+health_response=$(curl -s -i http://$HOST:8081/healthz)
 health_status=$(echo "$health_response" | grep HTTP | awk '{print $2}')
 
 echo "Status Code: $health_status"
@@ -204,7 +208,7 @@ failed_count=0
 test_requests=10
 
 for i in $(seq 1 $test_requests); do
-    response=$(curl -s -i http://localhost:8080/version)
+    response=$(curl -s -i http://$HOST:8080/version)
     status_code=$(echo "$response" | grep HTTP | awk '{print $2}')
     app_pool=$(echo "$response" | grep -i "X-App-Pool:" | awk '{print $2}' | tr -d '\r')
 
