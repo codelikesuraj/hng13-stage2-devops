@@ -13,7 +13,7 @@ services:
     networks:
       - app_network
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:${APP_PORT:-3000}/healthz"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:${APP_PORT:-3000}/healthz"]
       interval: 5s
       timeout: 3s
       retries: 3
@@ -31,7 +31,7 @@ services:
     networks:
       - app_network
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:${APP_PORT:-3000}/healthz"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:${APP_PORT:-3000}/healthz"]
       interval: 5s
       timeout: 3s
       retries: 3
@@ -57,7 +57,7 @@ services:
         condition: service_healthy
     entrypoint: ["/bin/sh", "/entrypoint.sh"]
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:80/healthz"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:80/healthz"]
       interval: 5s
       timeout: 3s
       retries: 3
