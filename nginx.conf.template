@@ -7,9 +7,27 @@ upstream active_pool {
     server app_${BACKUP_POOL}:${APP_PORT} backup;
 }
 
+# Custom log format for operational visibility
+log_format detailed_json escape=json '{'
+    '"timestamp":"$time_iso8601",'
+    '"remote_addr":"$remote_addr",'
+    '"request":"$request",'
+    '"status":$status,'
+    '"body_bytes_sent":$body_bytes_sent,'
+    '"request_time":$request_time,'
+    '"upstream_addr":"$upstream_addr",'
+    '"upstream_status":"$upstream_status",'
+    '"upstream_response_time":"$upstream_response_time",'
+    '"pool":"$upstream_http_x_app_pool",'
+    '"release":"$upstream_http_x_release_id"'
+'}';
+
 server {
     listen 80;
     server_name localhost;
+
+    # Enable custom access log
+    access_log /var/log/nginx/access.log detailed_json;
 
     # Proxy timeout settings for quick failure detection
     proxy_connect_timeout 2s;
