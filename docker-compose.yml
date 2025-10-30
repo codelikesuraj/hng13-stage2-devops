@@ -45,7 +45,6 @@ services:
     volumes:
       - ./nginx.conf.template:/etc/nginx/templates/nginx.conf.template:ro
       - ./entrypoint.sh:/entrypoint.sh:ro
-      - nginx_logs:/var/log/nginx
     environment:
       - ACTIVE_POOL=${ACTIVE_POOL}
       - APP_PORT=${APP_PORT:-3000}
@@ -63,32 +62,7 @@ services:
       timeout: 3s
       retries: 3
 
-  alert_watcher:
-    image: python:3.11-slim
-    container_name: alert_watcher
-    volumes:
-      - nginx_logs:/var/log/nginx:ro
-      - ./watcher.py:/app/watcher.py:ro
-      - ./requirements.txt:/app/requirements.txt:ro
-    working_dir: /app
-    command: sh -c "pip install --no-cache-dir -r requirements.txt && python -u watcher.py"
-    environment:
-      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
-      - ACTIVE_POOL=${ACTIVE_POOL}
-      - ERROR_RATE_THRESHOLD=${ERROR_RATE_THRESHOLD:-2}
-      - WINDOW_SIZE=${WINDOW_SIZE:-200}
-      - ALERT_COOLDOWN_SEC=${ALERT_COOLDOWN_SEC:-300}
-      - MAINTENANCE_MODE=${MAINTENANCE_MODE:-false}
-    networks:
-      - app_network
-    depends_on:
-      - nginx
-    restart: unless-stopped
-
 networks:
   app_network:
     name: blue_green_network
     driver: bridge
-
-volumes:
-  nginx_logs:

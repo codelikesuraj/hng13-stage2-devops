@@ -1,10 +1,10 @@
 # Architecture Overview
 
-## Blue/Green Deployment with Nginx Auto-Failover & Monitoring
+## Blue/Green Deployment with Nginx Auto-Failover
 
 ### System Components
 
-```
+```                            
 +-----------------------------------------------------------+
 |                           Client                          |
 +-----------------------------|-----------------------------+
@@ -27,15 +27,12 @@
 |  |                                                     |  |
 |  |  Timeouts:                                          |  |
 |  |  - connect: 2s, send: 2s, read: 2s                  |  |
-|  |                                                     |  |
-|  |  Logging: Custom JSON format                        |  |
-|  |  - pool, release, upstream_status, latency          |  |
 |  +-----------------------------------------------------+  |
 +--------------|---------------------------|----------------+
                |                           |
             Primary                      Backup
                |                   (only on failure)
-               |                           |
+               |                           | 
               \|/                         \|/
   +-------------------------+   +-------------------------+
   |    Blue Service         |   |    Green Service        |
@@ -52,33 +49,6 @@
   |  - X-App-Pool: blue     |   |  - X-App-Pool: green    |
   |  - X-Release-Id: <id>   |   |  - X-Release-Id: <id>   |
   +-------------------------+   +-------------------------+
-
-                   |
-              Nginx Logs
-           (JSON formatted)
-                   |
-                  \|/
-+-----------------------------------------------------------+
-|                   Alert Watcher (Python)                  |
-|  +-----------------------------------------------------+  |
-|  |  Monitors: /var/log/nginx/access.log                |  |
-|  |                                                     |  |
-|  |  Detection:                                         |  |
-|  |  - Failover events (pool changes)                   |  |
-|  |  - High error rate (sliding window)                 |  |
-|  |  - Recovery events (back to primary)                |  |
-|  |                                                     |  |
-|  |  Alert Cooldown: 300s (configurable)                |  |
-|  +-----------------------------------------------------+  |
-+-----------------------------|-----------------------------+
-                              |
-                         Slack Webhook
-                              |
-                             \|/
-+-----------------------------------------------------------+
-|                      Slack Channel                        |
-|                 (Real-time Notifications)                 |
-+-----------------------------------------------------------+
 ```
 
 ## Failover Mechanism
@@ -132,7 +102,6 @@ When Blue fails (500 errors, timeouts, or connection errors):
 
 ### Environment Variables (.env)
 
-**Deployment Configuration:**
 ```
 BLUE_IMAGE → Docker image for Blue service
 GREEN_IMAGE → Docker image for Green service
@@ -140,15 +109,6 @@ ACTIVE_POOL → Which pool is primary (blue/green)
 RELEASE_ID_BLUE → Release identifier for Blue
 RELEASE_ID_GREEN → Release identifier for Green
 APP_PORT → Application port (default: 3000)
-```
-
-**Monitoring Configuration:**
-```
-SLACK_WEBHOOK_URL → Slack webhook for alerts
-ERROR_RATE_THRESHOLD → Error rate threshold percentage (default: 2)
-WINDOW_SIZE → Sliding window for error rate (default: 200 requests)
-ALERT_COOLDOWN_SEC → Cooldown between alerts (default: 300s)
-MAINTENANCE_MODE → Suppress alerts during maintenance (default: false)
 ```
 
 ### Docker Compose (docker-compose.yml)
@@ -169,17 +129,7 @@ MAINTENANCE_MODE → Suppress alerts during maintenance (default: false)
    - Uses nginx:alpine image
    - Exposes port 8080 → 80
    - Mounts nginx.conf.template and entrypoint.sh
-   - Shared volume: nginx_logs (for alert watcher access)
    - Waits for both Blue and Green to be healthy before starting
-   - Custom JSON logging to /var/log/nginx/access.log
-
-4. **alert_watcher service**:
-   - Uses python:3.11-slim image (no custom Dockerfile)
-   - Installs dependencies: requests library
-   - Runs watcher.py to monitor Nginx logs
-   - Shared volume: nginx_logs (read-only)
-   - Sends alerts to Slack webhook
-   - Restart policy: unless-stopped
 
 ### Nginx Configuration Template (nginx.conf.template)
 
@@ -272,134 +222,11 @@ Client → Nginx (port 8080)
 - Chaos endpoints for simulating failures
 - Automated test scripts and CI/CD workflow
 
-## Monitoring & Alerting Architecture
-
-### Log Processing Flow
-
-```
-1. HTTP Request → Nginx
-         ↓
-2. Nginx processes request (with retry if needed)
-         ↓
-3. Nginx writes JSON log entry to /var/log/nginx/access.log
-         ↓
-4. Alert Watcher tails access.log in real-time
-         ↓
-5. Watcher parses JSON and extracts:
-   - status (final HTTP status)
-   - upstream_status (may contain multiple statuses like "502, 200")
-   - pool (X-App-Pool header value)
-   - timestamp, latency, etc.
-         ↓
-6. Watcher tracks state:
-   - Request window (last 200 requests)
-   - Current pool (last_pool)
-   - Error counts and rates
-   - System degraded flag
-         ↓
-7. Watcher detects events:
-   - Failover (pool changed from blue → green)
-   - High error rate (>2% errors in window)
-   - Recovery (pool returned to blue OR error rate dropped)
-         ↓
-8. Alert with cooldown check → Slack webhook
-```
-
-### Alert Detection Logic
-
-#### 1. Failover Detection
-```
-IF current_pool == initial_pool AND last_pool != initial_pool:
-    → Recovery alert (back to primary)
-ELSE IF current_pool != last_pool:
-    → Failover alert (to backup pool)
-```
-
-#### 2. Error Rate Detection
-```
-window = last 200 requests
-error_count = count of 5xx statuses in window
-error_rate = (error_count / window_size) * 100
-
-IF error_rate > threshold (2%):
-    → High Error Rate alert
-    SET system_degraded = True
-ELSE IF system_degraded == True:
-    → Recovery alert (from degraded state)
-    SET system_degraded = False
-```
-
-#### 3. Upstream Status Parsing
-```
-Nginx may log: upstream_status = "502, 200"
-This means: First attempt failed (502), retry succeeded (200)
-
-Watcher logic:
-IF any status in upstream_status >= 500:
-    Track as error (even if final status is 200)
-ELSE:
-    Track final status
-```
-
-### Alert Cooldown Mechanism
-
-Each alert type has independent cooldown tracking:
-
-```
-last_failover_alert = timestamp
-last_recovery_alert = timestamp
-last_error_rate_alert = timestamp
-
-BEFORE sending alert:
-    IF (current_time - last_alert_time) < cooldown_period:
-        Log "cooldown active" and skip
-    ELSE:
-        Send alert and update last_alert_time
-```
-
-This prevents alert spam during oscillating failures.
-
-### Slack Integration
-
-**Alert Format:**
-```json
-{
-  "attachments": [{
-    "color": "warning" | "danger" | "good",
-    "title": ":warning: - Failover Detected",
-    "text": "Pool switch detected...\n\n- Previous Pool: blue\n- New Pool: green",
-    "footer": "Time: 2025-10-30 15:20:15"
-  }]
-}
-```
-
-**Alert Types:**
-1. **Startup Alert** (`:information_source:`) - Watcher started
-2. **Failover Alert** (`:warning:`) - Traffic switched to backup
-3. **Recovery Alert** (`:white_check_mark:`) - Traffic returned to primary or error rate dropped
-4. **High Error Rate** (`:rotating_light:`) - Error threshold exceeded
-
-### Maintenance Mode
-
-When `MAINTENANCE_MODE=true`:
-- All alerts are suppressed
-- Events are still logged to console
-- Useful during planned failover tests or deployments
-- Auto-disabled when recovery is detected
-
 ## Performance Characteristics
 
-### Deployment Performance
 - **Failure Detection Time**: < 2 seconds
 - **Failover Time**: < 2 seconds
 - **Recovery Time**: 5 seconds (configurable via fail_timeout)
 - **Maximum Request Duration**: < 5 seconds (connect + retry timeout)
 - **Zero Failed Requests**: Guaranteed (via retry mechanism)
 - **Success Rate During Failover**: 100% (all retried requests succeed)
-
-### Monitoring Performance
-- **Log Processing Latency**: < 100ms (real-time tail)
-- **Alert Delivery Time**: < 1 second (Slack webhook)
-- **Memory Footprint**: ~50MB (Python watcher + sliding window)
-- **CPU Usage**: < 1% (idle), < 5% (during high traffic)
-- **Alert Cooldown**: 300 seconds (prevents spam)
